@@ -125,29 +125,51 @@ class GoogleSheetsMySQLBridge{
 						$query = $this->build_update_query($db, $to_table, $id_field, $map_fields, $header,$data);	
 					}
 				}
-				echo $query;
-				echo "<br>";
-				$db->query($query);
+				//echo $query;				
+				$rs = $db->query($query);
+				if($rs === false){					
+					echo "<div style='color:red'>Bug When insert <br/> $query</div>";
+					exit;
+				}
 				
 				
 			}
 			fclose($handle);
 			
 		}
+		
+		echo "<h3>Done</h3>";
 	}	
 	
 	function build_insert_query($db, $table, $map_fields, $header,$data){
-		for ($i = 0; $i < count($header); $i++)
-		{
-			$header[$i] = "`".$header[$i]."`";
-		}
-		$header_seg = implode(",", $header);
 		
-		for ($i = 0; $i < count($data); $i++)
+		$keys = array();
+		$values = array();
+		
+		foreach ($map_fields as $db_field => $csv_field )
 		{
-			$data[$i] = "'".$db->escape_string($data[$i]). "'";
+			$keys[] = $db_field;
+			
+			$csv_field_index = array_search($csv_field, $header);			
+			if ($csv_field_index === false){
+				echo " csv_field $csv_field not found in header csv ";
+				exit;				
+			}			
+			$values[] = $db->escape_string($data[$csv_field_index]);
+			
+		}		
+		
+		for ($i = 0; $i < count($keys); $i++)
+		{
+			$keys[$i] = "`".$keys[$i]."`";
 		}
-		$data_seg = implode(",", $data);
+		$header_seg = implode(",", $keys);
+		
+		for ($i = 0; $i < count($values); $i++)
+		{
+			$values[$i] = "'".$db->escape_string($values[$i]). "'";
+		}
+		$data_seg = implode(",", $values);
 		return "INSERT INTO `$table` 
 			($header_seg) 
 			VALUES ($data_seg);";
