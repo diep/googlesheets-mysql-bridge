@@ -9,11 +9,13 @@ class GoogleSheetsMySQLBridge{
 	private $db_name = '';
 	
 	private $RULES = array(
+		/*
 			array(
 				'from_csv' => 'https://docs.google.com/spreadsheets/d/1BirUILeSVAFJs7E6IYr84BZiUij7BQt9FJohhDUdgVY/pub?gid=868951319&single=true&output=csv',
 				'to_table' => 'tt_category',
 				'sync_type'=> 'delete_and_insert'
 			),
+		*/
 		);
 		
 	public function setMYSQLAccess($db_host, $db_username, $db_password, $db_name){
@@ -21,8 +23,8 @@ class GoogleSheetsMySQLBridge{
 		$this->db_username = $db_username;
 		$this->db_password = $db_password;
 		$this->db_name = $db_name;
-		
 	}
+	
 	public function setGoogleSheetsRules($rules){
 		$this->RULES = $rules;
 	}
@@ -58,59 +60,83 @@ class GoogleSheetsMySQLBridge{
 			echo "<h5>$url</h5>";
 
 			ini_set('auto_detect_line_endings', TRUE);
-			if (($handle = fopen($url, 'r')) !== FALSE) 
+			if (($handle = fopen($url, 'r')) === FALSE) 
 			{
-				$header = fgetcsv($handle, 2048, ',', '"');
-				echo "<h3>CSV has ". count($header) . " columns</h3>";				
-				for($j = 0; $j < count($header); $j++){					
-					$ok = in_array($header[$j], $db_fields);		
-					$color = $ok !== false ? 'back' : 'red';
-					echo "<div style='color:$color'>{$header[$j]}</div>";
+				echo "Loi khi moi file csv ";
+				exit;
+			}
+						
+			$header = fgetcsv($handle, 2048, ',', '"');
+			
+			$auto_map_fields = array();
+			echo "<h3>CSV has ". count($header) . " columns</h3>";				
+			for($j = 0; $j < count($header); $j++){					
+				$ok = in_array($header[$j], $db_fields);		
+				$color = $ok !== false ? 'back' : 'red';
+				echo "<div style='color:$color'>{$header[$j]}</div>";
+				if ($ok !== false){
+					$auto_map_fields[$header[$j]] = $header[$j];
+				}
+			}
+			//echo json_encode($auto_map_fields);
+			
+			//maping.
+			if(isset($SYNCS[$i]['map_fields'])){
+				$map_fields = $SYNCS[$i]['map_fields'];
+			} else {
+				//calc map fields.
+				$map_fields = $auto_map_fields;
+			}			
+			
+			echo "<h3>=> MAP FIELD</h3>";
+			var_dump ($map_fields);
+			echo "<hr>";
+			
+			while (($data = fgetcsv($handle, 2048, ',', '"')) !== FALSE) 
+			{
+				if(isset($SYNCS[$i]['fake_data'])){
+					for ($j = 0; $j < count($SYNCS[$i]['fake_data']); $j++)
+					{
+						$field = $SYNCS[$i]['fake_data'][$j];
+						if(!in_array($field, $header))
+						{
+							$header[] = $field;
+						}
+						$data[] = rand(50000, 10000000);
+						
+					}
 				}
 				
-				while (($data = fgetcsv($handle, 2048, ',', '"')) !== FALSE) 
-				{
-					if(isset($SYNCS[$i]['fake_data'])){
-						for ($j = 0; $j < count($SYNCS[$i]['fake_data']); $j++)
-						{
-							$field = $SYNCS[$i]['fake_data'][$j];
-							if(!in_array($field, $header))
-							{
-								$header[] = $field;
-							}
-							$data[] = rand(50000, 10000000);
-							
-						}
+				if($sync_type == 'delete_and_insert'){
+					
+					$query = $this->build_insert_query($db, $to_table, $map_fields, $header,$data);					
+					
+				} else if ($sync_type = 'update_if_exist_or_insert_new'){
+					//check exist
+					$id_field = $SYNCS[$i]['id_field'];
+					$exists = $this->check_exists($db, $to_table, $id_field, $map_fields, $header, $data);
+					
+					//update 
+					if(!$exists)
+					{
+						$query = $this->build_insert_query($db, $to_table, $map_fields, $header,$data);	
+					} else {
+						
+						$query = $this->build_update_query($db, $to_table, $id_field, $map_fields, $header,$data);	
 					}
-					
-					if($sync_type == 'delete_and_insert'){
-						
-						$query = $this->build_insert_query($db, $to_table, $header,$data);					
-						
-					} else if ($sync_type = 'update_if_exist_or_insert_new'){
-						//check exist
-						$id_field = $SYNCS[$i]['id_field'];
-						$exists = $this->check_exists($db, $to_table, $id_field, $header, $data);
-						
-						//update 
-						if(!$exists)
-						{
-							$query = $this->build_insert_query($db, $to_table, $header,$data);	
-						} else {
-							$query = $this->build_update_query($db, $to_table, $id_field,  $header,$data);	
-						}
-					}
-					echo $query;
-					echo "<br>";
-					$db->query($query);
-					
-					
 				}
-				fclose($handle);
+				echo $query;
+				echo "<br>";
+				$db->query($query);
+				
+				
 			}
+			fclose($handle);
+			
 		}
 	}	
-	function build_insert_query($db, $table, $header,$data){
+	
+	function build_insert_query($db, $table, $map_fields, $header,$data){
 		for ($i = 0; $i < count($header); $i++)
 		{
 			$header[$i] = "`".$header[$i]."`";
@@ -126,29 +152,42 @@ class GoogleSheetsMySQLBridge{
 			($header_seg) 
 			VALUES ($data_seg);";
 	}
-	function get_id_value($id_field, $header, $data){
-		$index = array_search($id_field, $header);
+	
+	function get_id_value($id_field, $map_fields, $header, $data){
+		
+		$csv_id_field = $map_fields[$id_field];
+		
+		$index = array_search($csv_id_field, $header);
 		if($index === false){
-			echo "ERORRRRRRRRR $id_field not found in header csv";
+			echo "ERORRRRRRRRR $csv_id_field not found in header csv. <br/>";
+			exit;
 		}
 		return $data[$index];
 	}
-	function check_exists($db, $table, $id_field, $header, $data){
+	
+	function check_exists($db, $table, $id_field, $map_fields,  $header, $data){
 		
-		$id_value = $this->get_id_value($id_field, $header, $data);		
+		$id_value = $this->get_id_value($id_field, $map_fields, $header, $data);		
 		$rs = $db->fetchAll("select * from $table where $id_field = '$id_value'");
 		
-		return count($rs) > 0;		
+		return count($rs) > 0;
 	}
-	function build_update_query($db, $table, $id_field, $header,$data){
+	
+	function build_update_query($db, $table, $id_field, $map_fields, $header,$data){		
+		$id_value = $this->get_id_value($id_field, $map_fields, $header, $data);		
+		$seg = array(); 
 		
-		$id_value = $this->get_id_value($id_field, $header, $data);		
-		$seg = array();
-		for ($i = 0; $i < count($header); $i++)
+		foreach ($map_fields as $db_field => $csv_field )
 		{
-			$field_key = $header[$i];
-			$field_val = $db->escape_string($data[$i]);
-			$seg[] = "`$field_key` = '$field_val'";
+			$csv_field_index = array_search($csv_field, $header);
+			
+			if ($csv_field_index === false){
+				echo " csv_field $csv_field not found in header csv ";
+				exit;				
+			}
+			//$field_key = $header[$i];
+			$field_val = $db->escape_string($data[$csv_field_index]);
+			$seg[] = "`$db_field` = '$field_val'";
 		}
 		$seg_sql = implode(",", $seg);
 		return "UPDATE `$table` SET $seg_sql where $id_field = '$id_value'";
